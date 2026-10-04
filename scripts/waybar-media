@@ -1,0 +1,94 @@
+#!/bin/sh
+set -eu
+
+mode=${1:-now}
+
+emit_json() {
+    python3 -c '
+import json
+import sys
+
+print(json.dumps({"text": sys.argv[1], "tooltip": sys.argv[2], "class": sys.argv[3]}))
+' "$1" "$2" "$3"
+}
+
+has_player() {
+    players=$(playerctl -l 2>/dev/null || true)
+    [ -n "$players" ]
+}
+
+current_player() {
+    playerctl -l 2>/dev/null | sed -n '1p'
+}
+
+case "$mode" in
+    now)
+        if ! has_player; then
+            emit_json "" "No media player is active" "inactive"
+            exit 0
+        fi
+
+        status=$(playerctl status 2>/dev/null || true)
+        track=$(playerctl metadata --format '{{artist}} - {{title}}' 2>/dev/null || true)
+        [ -n "$track" ] || track="Unknown track"
+
+        case "$status" in
+            Playing) state="PLAYING" ;;
+            Paused) state="PAUSED" ;;
+            *) state="READY" ;;
+        esac
+
+        emit_json "$track" "$state · $track" "$(printf '%s' "$status" | tr '[:upper:]' '[:lower:]')"
+        ;;
+    button-previous)
+        if has_player; then
+            emit_json "[<]" "Previous track" "control"
+        else
+            emit_json "" "No media player is active" "inactive"
+        fi
+        ;;
+    button-toggle)
+        if has_player; then
+            status=$(playerctl status 2>/dev/null || true)
+            if [ "$status" = Playing ]; then
+                emit_json "[||]" "Pause" "control"
+            else
+                emit_json "[>]" "Play" "control"
+            fi
+        else
+            emit_json "" "No media player is active" "inactive"
+        fi
+        ;;
+    button-next)
+            if has_player; then
+                emit_json "[>>]" "Next video / track" "control"
+        else
+            emit_json "" "No media player is active" "inactive"
+        fi
+        ;;
+    previous|toggle|next|stop)
+        if has_player; then
+            case "$mode" in
+                previous) playerctl previous ;;
+                toggle) playerctl play-pause ;;
+                next)
+                    player=$(current_player)
+                    if ! playerctl --player="$player" next; then
+                        notify-send \
+                            --app-name=hypr-osd \
+                            --hint=string:x-canonical-private-synchronous:hypr-osd \
+                            --expire-time=2200 \
+                            "Kan geen volgende media afspelen" \
+                            "De huidige mediaspeler accepteerde het next-commando niet."
+                        exit 1
+                    fi
+                    ;;
+                stop) playerctl stop ;;
+            esac
+        fi
+        ;;
+    *)
+        echo "Usage: waybar-media {now|button-previous|button-toggle|button-next|previous|toggle|next|stop}" >&2
+        exit 2
+        ;;
+esac

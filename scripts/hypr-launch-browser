@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+for browser in firefox firefox-esr firefox-bin chromium chromium-browser; do
+    if command -v "$browser" >/dev/null 2>&1; then
+        exec "$browser" "$@"
+    fi
+done
+
+echo "No supported browser found. Install Firefox or Chromium." >&2
+exit 127

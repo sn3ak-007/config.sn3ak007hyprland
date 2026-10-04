@@ -1,0 +1,35 @@
+#!/bin/sh
+set -eu
+
+service=${1:-}
+action=${2:-}
+
+if [ "$service" != bluetooth ] || [ "$action" != start ]; then
+    echo "Usage: hypr-config-service bluetooth start" >&2
+    exit 2
+fi
+
+if command -v systemctl >/dev/null 2>&1 &&
+    systemctl show-environment >/dev/null 2>&1; then
+    set -- systemctl start bluetooth.service
+elif command -v rc-service >/dev/null 2>&1; then
+    set -- rc-service bluetooth start
+elif command -v sv >/dev/null 2>&1; then
+    set -- sv up bluetooth
+else
+    echo "No supported service manager found (systemd, OpenRC, or runit)." >&2
+    exit 1
+fi
+
+if [ "$(id -u)" -eq 0 ]; then
+    exec "$@"
+elif command -v pkexec >/dev/null 2>&1; then
+    exec pkexec "$@"
+elif command -v sudo >/dev/null 2>&1; then
+    exec sudo "$@"
+elif command -v doas >/dev/null 2>&1; then
+    exec doas "$@"
+else
+    echo "Starting Bluetooth requires root privileges (install polkit, sudo, or doas)." >&2
+    exit 1
+fi

@@ -1,0 +1,154 @@
+{
+    "layer": "top",
+    "position": "top",
+    "height": 38,
+    "spacing": 5,
+
+    "modules-left": [
+        "hyprland/workspaces",
+        "hyprland/window",
+        "custom/media-previous",
+        "custom/media-toggle",
+        "custom/media-next",
+        "custom/media-now"
+    ],
+    "modules-center": [
+        "clock"
+    ],
+    "modules-right": [
+        "cpu",
+        "memory",
+        "custom/fan",
+        "custom/network",
+        "custom/bluetooth",
+        "pulseaudio",
+        "custom/brightness",
+        "battery"
+    ],
+
+    "hyprland/workspaces": {
+        "format": "{name}",
+        "persistent-workspaces": {
+            "*": 5
+        },
+        "all-outputs": true,
+        "disable-scroll": true,
+        "on-click": "activate"
+    },
+
+    "hyprland/window": {
+        "format": "{}",
+        "max-length": 52,
+        "separate-outputs": true
+    },
+
+    "cpu": {
+        "format": "■ CPU {usage}%",
+        "interval": 5,
+        "tooltip-format": "Processor · {usage}% used",
+        "states": {
+            "warning": 70,
+            "critical": 90
+        }
+    },
+
+    "memory": {
+        "format": "□ RAM {percentage}%",
+        "interval": 10,
+        "tooltip-format": "Memory · {used} / {total}",
+        "states": {
+            "warning": 75,
+            "critical": 90
+        }
+    },
+
+    "custom/fan": {
+        "exec": "$HOME/.local/bin/waybar-fan-speed",
+        "interval": 5,
+        "return-type": "json",
+        "tooltip": true
+    },
+
+    "custom/media-previous": {
+        "exec": "$HOME/.local/bin/waybar-media button-previous",
+        "interval": 2,
+        "return-type": "json",
+        "tooltip": true,
+        "on-click": "$HOME/.local/bin/waybar-media previous"
+    },
+
+    "custom/media-toggle": {
+        "exec": "$HOME/.local/bin/waybar-media button-toggle",
+        "interval": 2,
+        "return-type": "json",
+        "tooltip": true,
+        "on-click": "$HOME/.local/bin/waybar-media toggle"
+    },
+
+    "custom/media-next": {
+        "exec": "$HOME/.local/bin/waybar-media button-next",
+        "interval": 2,
+        "return-type": "json",
+        "tooltip": true,
+        "on-click": "$HOME/.local/bin/waybar-media next"
+    },
+
+    "custom/media-now": {
+        "exec": "$HOME/.local/bin/waybar-media now",
+        "interval": 2,
+        "return-type": "json",
+        "tooltip": true,
+        "max-length": 36
+    },
+
+    "custom/network": {
+        "exec": "$HOME/.local/bin/waybar-network-status",
+        "interval": 10,
+        "tooltip": true,
+        "on-click": "$HOME/.local/bin/waybar-popup wifi"
+    },
+
+    "custom/bluetooth": {
+        "exec": "$HOME/.local/bin/waybar-bluetooth-status",
+        "interval": 10,
+        "tooltip": true,
+        "on-click": "$HOME/.local/bin/waybar-popup bluetooth"
+    },
+
+    "pulseaudio": {
+        "format": "♪ {volume}%",
+        "format-bluetooth": "♪ {volume}%",
+        "format-muted": "× MUTE",
+        "tooltip-format": "{desc}\nVolume {volume}%",
+        "scroll-step": 5,
+        "on-click": "$HOME/.local/bin/waybar-popup volume"
+    },
+
+    "custom/brightness": {
+        "exec": "brightnessctl -m | awk -F, '{print $4}'",
+        "format": "☼ {}",
+        "interval": 5,
+        "tooltip": true,
+        "tooltip-format": "Screen brightness · click to adjust",
+        "on-click": "$HOME/.local/bin/waybar-popup brightness"
+    },
+
+    "battery": {
+        "format": "▬ {capacity}%",
+        "format-charging": "▲ {capacity}%",
+        "format-plugged": "AC {capacity}%",
+        "states": {
+            "warning": 25,
+            "critical": 10
+        },
+        "format-time": "{H}:{M} left",
+        "tooltip-format": "{time} remaining"
+    },
+
+    "clock": {
+        "interval": 10,
+        "format": "○  {:%H:%M   ·   %d.%m.%Y}",
+        "tooltip-format": "{:%A, %d %B %Y}",
+        "on-click": "$HOME/.local/bin/waybar-popup calendar"
+    }
+}

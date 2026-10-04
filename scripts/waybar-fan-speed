@@ -1,0 +1,56 @@
+#!/bin/sh
+set -eu
+
+fans=
+sensor_name=
+percent=
+primary_rpm=
+
+for hwmon in /sys/class/hwmon/hwmon*; do
+    [ -r "$hwmon/name" ] || continue
+    name=$(cat "$hwmon/name")
+
+    for sensor in "$hwmon"/fan*_input; do
+        [ -r "$sensor" ] || continue
+        rpm=$(cat "$sensor")
+        case "$rpm" in
+            ''|*[!0-9]*)
+                echo "Invalid fan speed reading from $sensor: $rpm" >&2
+                exit 1
+                ;;
+        esac
+
+        fan=${sensor##*/}
+        fan_number=${fan#fan}
+        fan_number=${fan_number%_input}
+        pwm="$hwmon/pwm$fan_number"
+        if [ -r "$pwm" ]; then
+            pwm_value=$(cat "$pwm")
+            case "$pwm_value" in
+                ''|*[!0-9]*)
+                    echo "Invalid PWM reading from $pwm: $pwm_value" >&2
+                    exit 1
+                    ;;
+            esac
+            percent=$(( (pwm_value * 100 + 127) / 255 ))
+        fi
+
+        [ -z "$fans" ] || fans="$fans · "
+        fans="${fans}fan$fan_number: ${rpm} RPM"
+        sensor_name=$name
+        primary_rpm=$rpm
+    done
+done
+
+if [ -z "$fans" ]; then
+    printf '{"text":"FAN N/A","tooltip":"No readable fan RPM sensor found"}\n'
+    exit 0
+fi
+
+if [ -n "$percent" ]; then
+    printf '{"text":"FAN %s%%","tooltip":"%s: fan output %s%% (PWM), %s RPM; %s"}\n' \
+        "$percent" "$sensor_name" "$percent" "$primary_rpm" "$fans"
+else
+    printf '{"text":"FAN %s RPM","tooltip":"%s: %s"}\n' \
+        "$primary_rpm" "$sensor_name" "$fans"
+fi

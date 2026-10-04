@@ -1,0 +1,1048 @@
+#!/usr/bin/env python3
+
+import atexit
+import ctypes
+import ctypes.util
+import re
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+
+import cairo
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, GLib, Gtk, Pango
+
+_original_follow_mouse = None
+EDUVPN_CLI = shutil.which("eduvpn-cli")
+EDUVPN_GUI = shutil.which("eduvpn-gui")
+
+
+def run_command(*args, timeout=3):
+    return subprocess.run(
+        args,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    ).stdout.strip()
+
+
+def disable_hover_focus():
+    global _original_follow_mouse
+
+    output = run_command("hyprctl", "getoption", "input:follow_mouse")
+    match = re.search(r"int:\s*(-?\d+)", output)
+    if not match:
+        raise RuntimeError(f"Could not read Hyprland mouse-focus setting: {output}")
+
+    _original_follow_mouse = match.group(1)
+    run_command("hyprctl", "eval", "hl.config({ input = { follow_mouse = 0 } })")
+
+
+def restore_hover_focus():
+    global _original_follow_mouse
+
+    if _original_follow_mouse is None:
+        return
+
+    value = _original_follow_mouse
+    _original_follow_mouse = None
+    run_command("hyprctl", "eval", f"hl.config({{ input = {{ follow_mouse = {value} }} }})")
+
+
+atexit.register(restore_hover_focus)
+
+
+def handle_termination(_signum, _frame):
+    restore_hover_focus()
+    Gtk.main_quit()
+
+
+def notify_error(title, error):
+    message = str(error).strip() or "The command failed."
+    subprocess.run(
+        ["notify-send", "--urgency=critical", "--app-name=Waybar", title, message],
+        check=False,
+    )
+
+
+def load_slider_value(kind):
+    if kind == "volume":
+        output = run_command("wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@")
+        match = re.search(r"Volume:\s*([0-9.]+)", output)
+        if not match:
+            raise RuntimeError(f"Could not read audio volume: {output}")
+        return min(100, round(float(match.group(1)) * 100))
+
+    output = run_command("brightnessctl", "-m")
+    fields = output.splitlines()[0].split(",")
+    if len(fields) < 4 or not fields[3].endswith("%"):
+        raise RuntimeError(f"Could not read screen brightness: {output}")
+    return int(fields[3].rstrip("%"))
+
+
+def apply_slider_value(kind, value):
+    if kind == "volume":
+        run_command("wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{value / 100:.2f}")
+    else:
+        run_command("brightnessctl", "set", f"{value}%")
+
+
+def active_wifi_name():
+    output = run_command(
+        "nmcli",
+        "-t",
+        "--escape",
+        "no",
+        "-f",
+        "IN-USE,SSID",
+        "device",
+        "wifi",
+        "list",
+        "--rescan",
+        "no",
+    )
+    for line in output.splitlines():
+        if line.startswith("*:"):
+            return line[2:]
+    return ""
+
+
+def configure_layer_shell(window):
+    library_path = ctypes.util.find_library("gtk-layer-shell")
+    if not library_path:
+        raise RuntimeError("libgtk-layer-shell is not installed")
+
+    library = ctypes.CDLL(library_path)
+    pointer = ctypes.c_void_p(hash(window))
+    library.gtk_layer_init_for_window.argtypes = [ctypes.c_void_p]
+    library.gtk_layer_set_layer.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    library.gtk_layer_set_anchor.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_bool]
+    library.gtk_layer_set_margin.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+    library.gtk_layer_set_keyboard_mode.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    library.gtk_layer_set_namespace.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+
+    library.gtk_layer_init_for_window(pointer)
+    library.gtk_layer_set_layer(pointer, 3)
+    library.gtk_layer_set_anchor(pointer, 2, True)
+    library.gtk_layer_set_anchor(pointer, 1, True)
+    library.gtk_layer_set_margin(pointer, 2, 8)
+    library.gtk_layer_set_margin(pointer, 1, 12)
+    library.gtk_layer_set_keyboard_mode(pointer, 2)
+    library.gtk_layer_set_namespace(pointer, b"waybar-control-popup")
+
+
+def install_style():
+    css = b"""
+    * {
+        font-family: "Liberation Mono", monospace;
+        font-size: 12px;
+    }
+    window {
+        background-color: transparent;
+        color: #eeeeee;
+    }
+    .popup-card {
+        background-color: #111111;
+        border: 1px solid #4b4b4b;
+        border-radius: 2px;
+        padding: 16px;
+    }
+    label {
+        color: #eeeeee;
+    }
+    .popup-title {
+        font-weight: bold;
+        font-size: 15px;
+    }
+    .popup-subtitle {
+        color: #a5a5a5;
+        font-size: 11px;
+    }
+    .popup-value {
+        color: #f0f0f0;
+        font-size: 13px;
+        font-weight: bold;
+    }
+    scale trough {
+        min-height: 7px;
+        background-color: #303030;
+        border-radius: 1px;
+    }
+    scale trough highlight {
+        background-color: #dedede;
+        border-radius: 1px;
+    }
+    scale slider {
+        min-width: 17px;
+        min-height: 17px;
+        background-color: #ffffff;
+        border: 1px solid #111111;
+        border-radius: 2px;
+    }
+    button {
+        color: #eeeeee;
+        background-image: none;
+        background-color: #202020;
+        border: 1px solid #3f3f3f;
+        border-radius: 2px;
+        box-shadow: none;
+        min-height: 30px;
+        padding: 4px 10px;
+    }
+    button:hover {
+        background-image: none;
+        background-color: #333333;
+        border-color: #777777;
+    }
+    button.popup-close {
+        min-width: 28px;
+        min-height: 28px;
+        padding: 0;
+        border-radius: 2px;
+        font-size: 16px;
+    }
+    button.popup-secondary {
+        background-color: #171717;
+    }
+    button:checked {
+        background-color: #e0e0e0;
+        color: #111111;
+    }
+    calendar {
+        background-color: #171717;
+        color: #e8e8e8;
+        border-radius: 2px;
+    }
+    calendar header {
+        color: #ffffff;
+    }
+    calendar grid {
+        color: #c5c5c5;
+    }
+    calendar:selected {
+        background-color: #e2e2e2;
+        color: #111111;
+    }
+    """
+    provider = Gtk.CssProvider()
+    provider.load_from_data(css)
+    Gtk.StyleContext.add_provider_for_screen(
+        Gdk.Screen.get_default(),
+        provider,
+        Gtk.STYLE_PROVIDER_PRIORITY_USER,
+    )
+
+
+def make_window(title, width):
+    window = Gtk.Window()
+    window.set_title(title)
+    window.set_default_size(width, -1)
+    window.set_resizable(False)
+    window.set_decorated(False)
+    window.set_skip_taskbar_hint(True)
+    window.set_skip_pager_hint(True)
+    window.connect("key-press-event", on_key_press)
+    window.connect("focus-out-event", close_on_focus_loss)
+    configure_layer_shell(window)
+
+    card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+    card.get_style_context().add_class("popup-card")
+    window.add(card)
+    return window, card
+
+
+def close_on_focus_loss(_window, _event):
+    GLib.idle_add(Gtk.main_quit)
+    return False
+
+
+def add_header(card, title_text):
+    row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+    title = Gtk.Label(label=title_text)
+    title.get_style_context().add_class("popup-title")
+    title.set_halign(Gtk.Align.START)
+    title.set_hexpand(True)
+    row.pack_start(title, True, True, 0)
+
+    close = Gtk.Button(label="×")
+    close.set_tooltip_text("Close")
+    close.get_style_context().add_class("popup-close")
+    close.connect("clicked", lambda *_: Gtk.main_quit())
+    row.pack_end(close, False, False, 0)
+    card.pack_start(row, False, False, 0)
+
+
+def add_subtitle(card, text):
+    label = Gtk.Label(label=text)
+    label.get_style_context().add_class("popup-subtitle")
+    label.set_halign(Gtk.Align.START)
+    label.set_xalign(0)
+    label.set_line_wrap(True)
+    card.pack_start(label, False, False, 0)
+    return label
+
+
+def add_action_button(card, label, callback):
+    button = Gtk.Button(label=label)
+    button.set_halign(Gtk.Align.FILL)
+    button.get_style_context().add_class("popup-secondary")
+    button.connect("clicked", callback)
+    card.pack_start(button, False, False, 0)
+    return button
+
+
+def on_key_press(_window, event):
+    if event.keyval == Gdk.KEY_Escape:
+        Gtk.main_quit()
+        return True
+    return False
+
+
+def show_calendar():
+    window, card = make_window("Calendar", 320)
+    add_header(card, "Calendar")
+
+    calendar = Gtk.Calendar()
+    calendar.set_display_options(
+        Gtk.CalendarDisplayOptions.SHOW_HEADING
+        | Gtk.CalendarDisplayOptions.SHOW_DAY_NAMES
+    )
+    card.pack_start(calendar, True, True, 0)
+
+    window.show_all()
+    Gtk.main()
+
+
+def show_wifi():
+    window, card = make_window("Wi-Fi", 390)
+    add_header(card, "Wi-Fi")
+
+    status_label = add_subtitle(card, "")
+    add_subtitle(card, "EDUVPN")
+    eduvpn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    eduvpn_status = Gtk.Label(label="Checking status…", xalign=0)
+    eduvpn_status.set_hexpand(True)
+    eduvpn_row.pack_start(eduvpn_status, True, True, 0)
+    open_eduvpn = Gtk.Button(label="Open eduVPN")
+    open_eduvpn.get_style_context().add_class("popup-secondary")
+    eduvpn_row.pack_end(open_eduvpn, False, False, 0)
+    card.pack_start(eduvpn_row, False, False, 0)
+
+    disconnect_eduvpn = Gtk.Button(label="Disconnect eduVPN")
+    disconnect_eduvpn.get_style_context().add_class("popup-secondary")
+    disconnect_eduvpn.set_no_show_all(True)
+    card.pack_start(disconnect_eduvpn, False, False, 0)
+
+    eduvpn_state = {"busy": False, "connected": False, "last_error": None}
+
+    def apply_eduvpn_status(connected, error=None):
+        eduvpn_state["busy"] = False
+        if error:
+            eduvpn_status.set_text("eduVPN status unavailable")
+            disconnect_eduvpn.hide()
+            if eduvpn_state["last_error"] != str(error):
+                notify_error("eduVPN status", error)
+            eduvpn_state["last_error"] = str(error)
+            return GLib.SOURCE_REMOVE
+
+        eduvpn_state["last_error"] = None
+        eduvpn_state["connected"] = connected
+        eduvpn_status.set_text("Connected" if connected else "Not connected")
+        disconnect_eduvpn.set_visible(connected)
+        return GLib.SOURCE_REMOVE
+
+    def refresh_eduvpn():
+        if eduvpn_state["busy"]:
+            return GLib.SOURCE_REMOVE
+        if not EDUVPN_CLI:
+            eduvpn_state["busy"] = False
+            eduvpn_status.set_text("Optional: eduVPN is not installed")
+            disconnect_eduvpn.hide()
+            open_eduvpn.set_sensitive(False)
+            return GLib.SOURCE_REMOVE
+        eduvpn_state["busy"] = True
+
+        def check_status():
+            try:
+                result = subprocess.run(
+                    [EDUVPN_CLI, "status"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=8,
+                )
+                output = f"{result.stdout}\n{result.stderr}".casefold()
+                if "you are currently not connected to a server" in output or "you are not connected to a server" in output:
+                    connected = False
+                elif "connected to:" in output:
+                    connected = True
+                else:
+                    raise RuntimeError(
+                        f"eduVPN status returned an unexpected response (exit code {result.returncode})"
+                    )
+                GLib.idle_add(apply_eduvpn_status, connected)
+            except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+                GLib.idle_add(apply_eduvpn_status, False, error)
+
+        threading.Thread(target=check_status, daemon=True).start()
+        return GLib.SOURCE_REMOVE
+
+    def open_eduvpn_app(_button):
+        if not EDUVPN_GUI:
+            notify_error("eduVPN", "Install the eduVPN desktop application to use this option.")
+            return
+        try:
+            subprocess.Popen([EDUVPN_GUI])
+            Gtk.main_quit()
+        except OSError as error:
+            notify_error("eduVPN", error)
+
+    def disconnect_eduvpn_session(_button):
+        disconnect_eduvpn.set_sensitive(False)
+
+        def disconnect():
+            try:
+                result = subprocess.run(
+                    [EDUVPN_CLI, "disconnect"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(f"eduVPN disconnect failed (exit code {result.returncode})")
+                GLib.idle_add(refresh_eduvpn)
+            except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+                GLib.idle_add(notify_error, "eduVPN disconnect", error)
+                GLib.idle_add(disconnect_eduvpn.set_sensitive, True)
+
+        threading.Thread(target=disconnect, daemon=True).start()
+
+    open_eduvpn.connect("clicked", open_eduvpn_app)
+    disconnect_eduvpn.connect("clicked", disconnect_eduvpn_session)
+    refresh_eduvpn()
+    GLib.timeout_add_seconds(8, refresh_eduvpn)
+
+    network_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    network_scroll = Gtk.ScrolledWindow()
+    network_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    network_scroll.set_min_content_height(42)
+    network_scroll.set_max_content_height(240)
+    network_scroll.add(network_list)
+    card.pack_start(network_scroll, False, True, 0)
+
+    buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    radio_button = Gtk.Button()
+    radio_button.get_style_context().add_class("popup-secondary")
+    buttons.pack_start(radio_button, True, True, 0)
+
+    scan_button = Gtk.Button(label="Scan")
+    scan_button.get_style_context().add_class("popup-secondary")
+    buttons.pack_start(scan_button, True, True, 0)
+    card.pack_start(buttons, False, False, 0)
+
+    state = {"radio": "disabled"}
+
+    def split_nmcli_fields(line):
+        fields = []
+        current = []
+        escaped = False
+        for character in line:
+            if escaped:
+                current.append(character)
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == ":":
+                fields.append("".join(current))
+                current = []
+            else:
+                current.append(character)
+        if escaped:
+            current.append("\\")
+        fields.append("".join(current))
+        return fields
+
+    def refresh_wifi():
+        try:
+            radio = run_command("nmcli", "-t", "-f", "WIFI", "radio")
+            if radio not in ("enabled", "disabled"):
+                raise RuntimeError(f"Unexpected NetworkManager Wi-Fi state: {radio}")
+            state["radio"] = radio
+            radio_button.set_label("Turn Wi-Fi off" if radio == "enabled" else "Turn Wi-Fi on")
+            scan_button.set_sensitive(radio == "enabled")
+
+            if radio == "disabled":
+                status_label.set_text("Wi-Fi is turned off")
+                devices = []
+            else:
+                ssid = active_wifi_name()
+                status_label.set_text(f"Connected to {ssid}" if ssid else "Not connected")
+                output = run_command(
+                    "nmcli",
+                    "-t",
+                    "--escape",
+                    "yes",
+                    "-f",
+                    "IN-USE,SSID,SECURITY,SIGNAL",
+                    "device",
+                    "wifi",
+                    "list",
+                    "--rescan",
+                    "no",
+                )
+                by_ssid = {}
+                for line in output.splitlines():
+                    fields = split_nmcli_fields(line)
+                    if len(fields) != 4:
+                        continue
+                    active, network_ssid, security, signal_strength = fields
+                    if not network_ssid:
+                        continue
+                    try:
+                        strength = int(signal_strength)
+                    except ValueError:
+                        strength = 0
+                    current = by_ssid.get(network_ssid)
+                    if current is None or strength > current["signal"]:
+                        by_ssid[network_ssid] = {
+                            "active": active == "*",
+                            "security": security or "Open",
+                            "signal": strength,
+                        }
+                    elif active == "*":
+                        current["active"] = True
+                devices = sorted(
+                    by_ssid.items(),
+                    key=lambda item: (not item[1]["active"], -item[1]["signal"], item[0].casefold()),
+                )
+        except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+            notify_error("Wi-Fi status", error)
+            return GLib.SOURCE_CONTINUE
+
+        for child in network_list.get_children():
+            network_list.remove(child)
+
+        if radio == "enabled" and not devices:
+            add_subtitle(network_list, "No networks found. Try scanning.")
+        else:
+            for network_ssid, network in devices:
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                details = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+                network_name = Gtk.Label(label=network_ssid, xalign=0)
+                network_name.set_ellipsize(Pango.EllipsizeMode.END)
+                network_name.set_max_width_chars(24)
+                network_info = Gtk.Label(
+                    label=f"{network['security']} · {network['signal']}%",
+                    xalign=0,
+                )
+                network_info.get_style_context().add_class("popup-subtitle")
+                details.pack_start(network_name, False, False, 0)
+                details.pack_start(network_info, False, False, 0)
+                row.pack_start(details, True, True, 0)
+
+                if network["active"]:
+                    action = Gtk.Button(label="Disconnect")
+
+                    def disconnect_network(_button):
+                        try:
+                            wifi_devices = run_command(
+                                "nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device", "status"
+                            )
+                            wifi_interface = next(
+                                fields[0]
+                                for fields in (line.split(":") for line in wifi_devices.splitlines())
+                                if len(fields) >= 3 and fields[1] == "wifi" and fields[2] == "connected"
+                            )
+                            run_command("nmcli", "device", "disconnect", wifi_interface)
+                            refresh_wifi()
+                        except (OSError, subprocess.SubprocessError, RuntimeError, StopIteration) as error:
+                            notify_error("Wi-Fi disconnect", error)
+                else:
+                    action = Gtk.Button(label="Connect")
+
+                    def connect_network(
+                        button,
+                        target_ssid=network_ssid,
+                        secured=network["security"] not in ("", "--", "Open"),
+                    ):
+                        if target_ssid.casefold() == "eduroam":
+                            try:
+                                subprocess.run(
+                                    ["nmcli", "connection", "show", "eduroam"],
+                                    check=True,
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=5,
+                                )
+                                subprocess.Popen(
+                                    [
+                                        "alacritty",
+                                        "-e",
+                                        "nmcli",
+                                        "--ask",
+                                        "connection",
+                                        "up",
+                                        "id",
+                                        "eduroam",
+                                    ]
+                                )
+                                Gtk.main_quit()
+                            except subprocess.CalledProcessError:
+                                notify_error(
+                                    "eduroam",
+                                    "First run ~/.local/bin/setup-eduroam in a terminal to create the WPA2-Enterprise profile.",
+                                )
+                            except (OSError, subprocess.SubprocessError) as error:
+                                notify_error("eduroam connection", error)
+                            return
+
+                        if secured:
+                            try:
+                                subprocess.Popen(
+                                    [
+                                        "alacritty",
+                                        "-e",
+                                        "nmcli",
+                                        "--ask",
+                                        "device",
+                                        "wifi",
+                                        "connect",
+                                        target_ssid,
+                                    ]
+                                )
+                                Gtk.main_quit()
+                            except OSError as error:
+                                notify_error("Wi-Fi connection", error)
+                            return
+
+                        button.set_sensitive(False)
+                        button.set_label("Connecting…")
+
+                        def connect_in_background():
+                            try:
+                                run_command(
+                                    "nmcli",
+                                    "--wait",
+                                    "30",
+                                    "device",
+                                    "wifi",
+                                    "connect",
+                                    target_ssid,
+                                    timeout=35,
+                                )
+                            except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+                                GLib.idle_add(notify_error, "Wi-Fi connection", error)
+                            finally:
+                                GLib.idle_add(refresh_wifi)
+
+                        threading.Thread(target=connect_in_background, daemon=True).start()
+
+                action.get_style_context().add_class("popup-secondary")
+                row.pack_end(action, False, False, 0)
+                action.connect(
+                    "clicked",
+                    disconnect_network if network["active"] else connect_network,
+                )
+                network_list.pack_start(row, False, False, 0)
+
+        network_list.show_all()
+        return GLib.SOURCE_CONTINUE
+
+    def toggle_wifi(_button):
+        target = "off" if state["radio"] == "enabled" else "on"
+        try:
+            run_command("nmcli", "radio", "wifi", target)
+            GLib.timeout_add(500, refresh_wifi)
+        except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+            notify_error("Wi-Fi control", error)
+
+    def scan_networks(_button):
+        try:
+            run_command("nmcli", "device", "wifi", "rescan")
+            scan_button.set_label("Scanning…")
+
+            def finish_scan():
+                scan_button.set_label("Scan")
+                refresh_wifi()
+                return GLib.SOURCE_REMOVE
+
+            GLib.timeout_add_seconds(3, finish_scan)
+        except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+            notify_error("Wi-Fi scan", error)
+
+    radio_button.connect("clicked", toggle_wifi)
+    scan_button.connect("clicked", scan_networks)
+    refresh_wifi()
+    GLib.timeout_add_seconds(5, refresh_wifi)
+
+    def open_settings(_button):
+        try:
+            subprocess.Popen(["alacritty", "-e", "nmtui"])
+            Gtk.main_quit()
+        except OSError as error:
+            notify_error("Network settings", error)
+
+    add_action_button(card, "Open full network settings", open_settings)
+    window.show_all()
+    Gtk.main()
+
+
+def show_bluetooth():
+    window, card = make_window("Bluetooth", 390)
+    add_header(card, "Bluetooth")
+
+    try:
+        details = run_command("bluetoothctl", "show")
+        service = "active" if re.search(r"^\s*Powered:\s*(yes|no)", details, re.MULTILINE) else "inactive"
+    except (OSError, subprocess.SubprocessError):
+        details = ""
+        service = "inactive"
+
+    if service == "active":
+        match = re.search(r"^\s*Powered:\s*(yes|no)", details, re.MULTILINE)
+        powered = match.group(1) if match else "no"
+        status = "Bluetooth is on" if powered == "yes" else "Bluetooth is off"
+        toggle_label = "Turn Bluetooth off" if powered == "yes" else "Turn Bluetooth on"
+
+        def toggle_bluetooth(_button):
+            try:
+                run_command("bluetoothctl", "power", "off" if powered == "yes" else "on")
+                Gtk.main_quit()
+            except (OSError, subprocess.SubprocessError) as error:
+                notify_error("Bluetooth control", error)
+
+        toggle_action = toggle_bluetooth
+    elif service == "inactive":
+        status = "Bluetooth is unavailable or its service is stopped"
+        toggle_label = "Start Bluetooth service"
+
+        def toggle_bluetooth(_button):
+            try:
+                service_helper = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "hypr-config-service",
+                )
+                subprocess.Popen([service_helper, "bluetooth", "start"])
+                Gtk.main_quit()
+            except (OSError, subprocess.SubprocessError) as error:
+                notify_error("Bluetooth control", error)
+
+        toggle_action = toggle_bluetooth
+    else:
+        raise RuntimeError(f"Unexpected Bluetooth service state: {service}")
+
+    add_subtitle(card, status)
+    add_action_button(card, toggle_label, toggle_action)
+
+    if service == "active" and powered == "yes":
+        add_subtitle(card, "DEVICES")
+        device_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        device_scroll = Gtk.ScrolledWindow()
+        device_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        device_scroll.set_min_content_height(42)
+        device_scroll.set_max_content_height(220)
+        device_scroll.add(device_list)
+        card.pack_start(device_scroll, False, True, 0)
+
+        scan_state = {"active": False}
+
+        def bluetooth_devices(filter_name=None):
+            args = ["bluetoothctl", "devices"]
+            if filter_name:
+                args.append(filter_name)
+            output = run_command(*args)
+            devices = {}
+            for line in output.splitlines():
+                match = re.match(r"^Device\s+([0-9A-Fa-f:]{17})(?:\s+(.*))?$", line)
+                if match:
+                    address, name = match.groups()
+                    devices[address] = name.strip() if name and name.strip() else address
+            return devices
+
+        def refresh_devices():
+            try:
+                all_devices = bluetooth_devices()
+                paired_devices = bluetooth_devices("Paired")
+                connected_devices = bluetooth_devices("Connected")
+            except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+                notify_error("Bluetooth devices", error)
+                return GLib.SOURCE_CONTINUE
+
+            for child in device_list.get_children():
+                device_list.remove(child)
+
+            if not all_devices:
+                add_subtitle(
+                    device_list,
+                    "Scanning for devices..." if scan_state["active"] else "No devices found. Start a scan to discover devices.",
+                )
+                device_list.show_all()
+                return GLib.SOURCE_CONTINUE
+
+            for address, name in all_devices.items():
+                paired = address in paired_devices
+                connected = address in connected_devices
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                details = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+                device_name = Gtk.Label(label=name, xalign=0)
+                device_name.set_ellipsize(Pango.EllipsizeMode.END)
+                device_name.set_max_width_chars(22)
+                device_status = "Connected" if connected else "Paired" if paired else "Available"
+                status_label = Gtk.Label(label=device_status, xalign=0)
+                status_label.get_style_context().add_class("popup-subtitle")
+                details.pack_start(device_name, False, False, 0)
+                details.pack_start(status_label, False, False, 0)
+                row.pack_start(details, True, True, 0)
+
+                if paired:
+                    action = "Disconnect" if connected else "Connect"
+
+                    def toggle_connection(_button, device_address=address, is_connected=connected):
+                        command = "disconnect" if is_connected else "connect"
+                        try:
+                            run_command("bluetoothctl", command, device_address)
+                            GLib.timeout_add(1000, refresh_devices)
+                        except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+                            notify_error("Bluetooth device", error)
+
+                    button = Gtk.Button(label=action)
+                    button.get_style_context().add_class("popup-secondary")
+                    button.connect("clicked", toggle_connection)
+                    row.pack_end(button, False, False, 0)
+                else:
+                    button = Gtk.Button(label="Pair")
+
+                    def pair_device(_button, device_address=address):
+                        try:
+                            run_command(
+                                "bluetoothctl",
+                                "--agent",
+                                "NoInputNoOutput",
+                                "pair",
+                                device_address,
+                                timeout=25,
+                            )
+                            refresh_devices()
+                        except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+                            notify_error("Bluetooth pairing", error)
+
+                    button.get_style_context().add_class("popup-secondary")
+                    button.connect("clicked", pair_device)
+                    row.pack_end(button, False, False, 0)
+
+                device_list.pack_start(row, False, False, 0)
+
+            device_list.show_all()
+            return GLib.SOURCE_CONTINUE
+
+        def toggle_scan(button):
+            target = "off" if scan_state["active"] else "on"
+            try:
+                run_command("bluetoothctl", "scan", target)
+                scan_state["active"] = target == "on"
+                button.set_label("Stop scanning" if scan_state["active"] else "Scan for devices")
+                refresh_devices()
+            except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+                notify_error("Bluetooth scan", error)
+
+        scan_button = Gtk.Button(label="Scan for devices")
+        scan_button.get_style_context().add_class("popup-secondary")
+        scan_button.connect("clicked", toggle_scan)
+        card.pack_start(scan_button, False, False, 0)
+        refresh_devices()
+        GLib.timeout_add_seconds(4, refresh_devices)
+
+        def stop_scan(_window):
+            if scan_state["active"]:
+                try:
+                    run_command("bluetoothctl", "scan", "off")
+                except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+                    notify_error("Bluetooth scan", error)
+
+        window.connect("destroy", stop_scan)
+
+    def open_settings(_button):
+        try:
+            subprocess.Popen(["blueman-manager"])
+            Gtk.main_quit()
+        except OSError as error:
+            notify_error("Bluetooth settings", error)
+
+    add_action_button(card, "Open full Bluetooth manager", open_settings)
+    window.show_all()
+    Gtk.main()
+
+
+def show_slider(kind):
+    is_volume = kind == "volume"
+    title_text = "Volume" if is_volume else "Brightness"
+    value = load_slider_value(kind)
+    window, card = make_window(title_text, 340)
+    add_header(card, title_text)
+
+    row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+    slider = Gtk.DrawingArea()
+    slider.set_size_request(220, 32)
+    slider.set_hexpand(True)
+    slider.set_can_focus(True)
+    slider.add_events(
+        Gdk.EventMask.BUTTON_PRESS_MASK
+        | Gdk.EventMask.BUTTON_RELEASE_MASK
+        | Gdk.EventMask.POINTER_MOTION_MASK
+    )
+    row.pack_start(slider, True, True, 0)
+
+    value_label = Gtk.Label(label=f"{value}%")
+    value_label.get_style_context().add_class("popup-value")
+    value_label.set_width_chars(5)
+    row.pack_start(value_label, False, False, 0)
+    card.pack_start(row, False, False, 0)
+    add_subtitle(card, "Drag the slider or use the arrow keys")
+
+    if is_volume:
+        mute = Gtk.Button(label="Mute")
+        mute.set_halign(Gtk.Align.START)
+        mute.get_style_context().add_class("popup-secondary")
+        card.pack_start(mute, False, False, 0)
+
+        def toggle_mute(_button):
+            try:
+                run_command("wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "toggle")
+                muted = "[MUTED]" in run_command("wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@")
+                mute.set_label("Unmute" if muted else "Mute")
+            except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+                notify_error("Volume control", error)
+
+        try:
+            muted = "[MUTED]" in run_command("wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@")
+            mute.set_label("Unmute" if muted else "Mute")
+        except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+            notify_error("Volume control", error)
+        mute.connect("clicked", toggle_mute)
+
+    current = {"value": value, "source": 0}
+
+    def apply_pending():
+        current["source"] = 0
+        try:
+            apply_slider_value(kind, current["value"])
+        except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+            notify_error(f"{title_text} control", error)
+        return GLib.SOURCE_REMOVE
+
+    def set_value(value):
+        current["value"] = max(0, min(100, round(value)))
+        value_label.set_text(f"{current['value']}%")
+        slider.queue_draw()
+        if current["source"]:
+            GLib.source_remove(current["source"])
+        current["source"] = GLib.timeout_add(80, apply_pending)
+
+    def draw_slider(widget, context):
+        allocation = widget.get_allocation()
+        start = 12
+        end = max(start + 1, allocation.width - 12)
+        center_y = allocation.height / 2
+        knob_x = start + (end - start) * current["value"] / 100
+
+        context.set_line_cap(cairo.LINE_CAP_ROUND)
+        context.set_line_width(6)
+        context.set_source_rgb(0.20, 0.20, 0.20)
+        context.move_to(start, center_y)
+        context.line_to(end, center_y)
+        context.stroke()
+
+        context.set_source_rgb(0.88, 0.88, 0.88)
+        context.move_to(start, center_y)
+        context.line_to(knob_x, center_y)
+        context.stroke()
+
+        context.arc(knob_x, center_y, 8, 0, 2 * 3.141592653589793)
+        context.set_source_rgb(0.95, 0.95, 0.95)
+        context.fill_preserve()
+        context.set_line_width(2)
+        context.set_source_rgb(0.08, 0.08, 0.08)
+        context.stroke()
+        return False
+
+    def set_from_pointer(event):
+        width = slider.get_allocated_width()
+        start = 12
+        end = max(start + 1, width - 12)
+        set_value((event.x - start) / (end - start) * 100)
+
+    def button_press(_widget, event):
+        if event.button == 1:
+            slider.grab_focus()
+            set_from_pointer(event)
+            return True
+        return False
+
+    def pointer_motion(_widget, event):
+        if event.state & Gdk.ModifierType.BUTTON1_MASK:
+            set_from_pointer(event)
+            return True
+        return False
+
+    def key_press(_widget, event):
+        step = 5 if event.state & Gdk.ModifierType.SHIFT_MASK else 1
+        if event.keyval == Gdk.KEY_Left:
+            set_value(current["value"] - step)
+            return True
+        if event.keyval == Gdk.KEY_Right:
+            set_value(current["value"] + step)
+            return True
+        if event.keyval == Gdk.KEY_Home:
+            set_value(0)
+            return True
+        if event.keyval == Gdk.KEY_End:
+            set_value(100)
+            return True
+        return False
+
+    slider.connect("draw", draw_slider)
+    slider.connect("button-press-event", button_press)
+    slider.connect("motion-notify-event", pointer_motion)
+    slider.connect("key-press-event", key_press)
+    window.show_all()
+    slider.grab_focus()
+    Gtk.main()
+
+
+def main():
+    modes = {
+        "calendar": show_calendar,
+        "wifi": show_wifi,
+        "bluetooth": show_bluetooth,
+        "volume": lambda: show_slider("volume"),
+        "brightness": lambda: show_slider("brightness"),
+    }
+    if len(sys.argv) != 2 or sys.argv[1] not in modes:
+        print(f"Usage: {sys.argv[0]} {{{'|'.join(modes)}}}", file=sys.stderr)
+        return 2
+
+    install_style()
+    signal.signal(signal.SIGINT, handle_termination)
+    signal.signal(signal.SIGTERM, handle_termination)
+    disable_hover_focus()
+    try:
+        modes[sys.argv[1]]()
+    finally:
+        restore_hover_focus()
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        notify_error("Waybar control", error)
+        raise

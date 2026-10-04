@@ -1,0 +1,13 @@
+#!/bin/sh
+
+set -eu
+
+details=$(timeout 3s bluetoothctl show 2>/dev/null || true)
+powered=$(printf '%s\n' "$details" |
+    sed -n 's/^[[:space:]]*Powered: //p' | head -n 1)
+
+case "$powered" in
+    yes) printf '%s\n' "♦ BT on" ;;
+    no) printf '%s\n' "♦ BT off" ;;
+    *) printf '%s\n' "♦ BT N/A" ;;
+esac

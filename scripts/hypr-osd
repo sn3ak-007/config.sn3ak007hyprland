@@ -1,0 +1,115 @@
+#!/bin/sh
+set -eu
+
+notify() {
+    hyprctl dismissnotify >/dev/null
+    hyprctl notify -1 1400 'rgb(eeeeee)' "$1"
+}
+
+notify_osd() {
+    notify-send \
+        --app-name=hypr-osd \
+        --hint=string:x-canonical-private-synchronous:hypr-osd \
+        --expire-time=1400 \
+        "$1" "${2:-}"
+}
+
+make_bar() {
+    awk -v value="$1" 'BEGIN {
+        value += 0
+        if (value < 0) value = 0
+        if (value > 100) value = 100
+        filled = int((value + 5) / 10)
+        printf "["
+        for (i = 0; i < 10; i++)
+            printf "%s", i < filled ? "#" : "-"
+        printf "]"
+    }'
+}
+
+show_progress() {
+    label=$1
+    percent=$2
+    bar=$(make_bar "$percent")
+    notify_osd "${label} ${percent}%" "$bar"
+}
+
+show_volume() {
+    volume=$(wpctl get-volume @DEFAULT_AUDIO_SINK@)
+    percent=$(printf '%s\n' "$volume" | awk '{printf "%.0f", $2 * 100}')
+
+    case "$volume" in
+        *"[MUTED]"*) notify_osd "Geluid UIT" "[----------]" ;;
+        *) show_progress "Geluid" "$percent" ;;
+    esac
+}
+
+show_brightness() {
+    brightness=$(brightnessctl -m | awk -F, 'NR == 1 {gsub(/%/, "", $4); print $4}')
+    [ -n "$brightness" ] || {
+        echo "Could not read screen brightness" >&2
+        return 1
+    }
+    show_progress "Helderheid" "$brightness"
+}
+
+watch_caps_lock() {
+    led=
+    for candidate in /sys/class/leds/*::capslock/brightness; do
+        if [ -r "$candidate" ]; then
+            led=$candidate
+            break
+        fi
+    done
+    [ -n "$led" ] || {
+        echo "Could not find a readable Caps Lock LED" >&2
+        return 1
+    }
+
+    runtime_dir=${XDG_RUNTIME_DIR:-"/run/user/$(id -u)"}
+    socket="$runtime_dir/hypr/${HYPRLAND_INSTANCE_SIGNATURE:?}/.socket.sock"
+    previous=$(cat "$led")
+
+    while [ -S "$socket" ]; do
+        current=$(cat "$led")
+        if [ "$current" != "$previous" ]; then
+            if [ "$current" = 1 ]; then
+                notify "Caps Lock aan"
+            else
+                notify "Caps Lock uit"
+            fi
+            previous=$current
+        fi
+        sleep 0.2
+    done
+}
+
+case "${1:-}" in
+    volume-up)
+        wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+
+        show_volume
+        ;;
+    volume-down)
+        wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-
+        show_volume
+        ;;
+    volume-mute)
+        wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
+        show_volume
+        ;;
+    brightness-up)
+        brightnessctl set 5%+
+        show_brightness
+        ;;
+    brightness-down)
+        brightnessctl set 5%-
+        show_brightness
+        ;;
+    caps-watch)
+        watch_caps_lock
+        ;;
+    *)
+        echo "Usage: hypr-osd {volume-up|volume-down|volume-mute|brightness-up|brightness-down|caps-watch}" >&2
+        exit 2
+        ;;
+esac

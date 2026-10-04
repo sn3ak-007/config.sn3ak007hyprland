@@ -1,0 +1,15 @@
+#!/bin/sh
+
+set -eu
+
+video="${HYPRLAND_VIDEO_WALLPAPER:-$HOME/Pictures/wallpaper.webm}"
+
+if [ -r "$video" ] && command -v mpvpaper >/dev/null 2>&1; then
+    exec mpvpaper -o "no-audio --loop-file=inf --panscan=1" '*' "$video"
+fi
+
+if command -v hyprpaper >/dev/null 2>&1; then
+    exec hyprpaper
+fi
+
+printf '%s\n' "hypr-video-wallpaper: install hyprpaper or set HYPRLAND_VIDEO_WALLPAPER with mpvpaper for a wallpaper." >&2

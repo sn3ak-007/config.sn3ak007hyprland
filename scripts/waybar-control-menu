@@ -1,0 +1,161 @@
+#!/bin/sh
+
+set -eu
+
+command -v fuzzel >/dev/null 2>&1 || {
+    printf '%s\n' "waybar-control-menu: fuzzel is not installed" >&2
+    exit 1
+}
+
+notify() {
+    notify-send --app-name=Waybar "$1" "$2"
+}
+
+run_action() {
+    title=$1
+    shift
+
+    if "$@"; then
+        notify "$title" "Done"
+    else
+        notify-send --app-name=Waybar --urgency=critical "$title" "Command failed: $*"
+        exit 1
+    fi
+}
+
+menu() {
+    prompt=$1
+    shift
+
+    printf '%s\n' "$@" | fuzzel \
+        --dmenu \
+        --prompt="$prompt" \
+        --lines=5 \
+        --anchor=top-right \
+        --x-margin=12 \
+        --y-margin=42 \
+        --width=34 \
+        --background-color=111111f2 \
+        --text-color=e6e6e6ff \
+        --prompt-color=bdbdbdff \
+        --match-color=ffffffff \
+        --selection-color=e6e6e6ff \
+        --selection-text-color=111111ff \
+        --selection-match-color=111111ff \
+        --border-width=1 \
+        --border-color=666666ff \
+        --border-radius=0
+}
+
+bluetooth_powered() {
+    details=$(timeout 3s bluetoothctl show 2>/dev/null || true)
+    printf '%s\n' "$details" | grep -q '^[[:space:]]*Powered:'
+}
+
+power_action() {
+    action=$1
+    if command -v systemctl >/dev/null 2>&1 &&
+        systemctl show-environment >/dev/null 2>&1; then
+        systemctl "$action"
+    elif command -v loginctl >/dev/null 2>&1; then
+        case "$action" in
+            reboot) loginctl reboot ;;
+            poweroff) loginctl poweroff ;;
+            *) return 2 ;;
+        esac
+    else
+        case "$action" in
+            reboot) reboot ;;
+            poweroff) poweroff ;;
+            *) return 2 ;;
+        esac
+    fi
+}
+
+mode=${1:-}
+
+case "$mode" in
+    wifi)
+        wifi_state=$(nmcli -t -f WIFI radio)
+        case "$wifi_state" in
+            enabled) wifi_action="Turn Wi-Fi off" ;;
+            disabled) wifi_action="Turn Wi-Fi on" ;;
+            *)
+                printf 'waybar-control-menu: unexpected Wi-Fi state: %s\n' "$wifi_state" >&2
+                exit 1
+                ;;
+        esac
+
+        choice=$(menu "Wi-Fi: " "Open Wi-Fi settings" "$wifi_action") || exit 0
+        case "$choice" in
+            "Open Wi-Fi settings") alacritty -e nmtui ;;
+            "Turn Wi-Fi off") run_action "Wi-Fi" nmcli radio wifi off ;;
+            "Turn Wi-Fi on") run_action "Wi-Fi" nmcli radio wifi on ;;
+            "") exit 0 ;;
+            *) printf 'waybar-control-menu: unexpected Wi-Fi menu item: %s\n' "$choice" >&2; exit 1 ;;
+        esac
+        ;;
+    bluetooth)
+        if bluetooth_powered; then
+            powered=$(timeout 3s bluetoothctl show 2>/dev/null |
+                sed -n 's/^[[:space:]]*Powered: //p' | head -n 1 || true)
+
+            case "$powered" in
+                yes) power_action="Turn Bluetooth off" ;;
+                no) power_action="Turn Bluetooth on" ;;
+                *) power_action="Turn Bluetooth on" ;;
+            esac
+
+            choice=$(menu "Bluetooth: " "Open Bluetooth settings" "$power_action") || exit 0
+            case "$choice" in
+                "Open Bluetooth settings") blueman-manager ;;
+                "Turn Bluetooth on") run_action "Bluetooth" timeout 8s bluetoothctl power on ;;
+                "Turn Bluetooth off") run_action "Bluetooth" timeout 8s bluetoothctl power off ;;
+                "") exit 0 ;;
+                *) printf 'waybar-control-menu: unexpected Bluetooth menu item: %s\n' "$choice" >&2; exit 1 ;;
+            esac
+        else
+            choice=$(menu "Bluetooth: " "Start Bluetooth service" "Open Bluetooth settings") || exit 0
+            case "$choice" in
+                "Start Bluetooth service") run_action "Bluetooth" "$HOME/.local/bin/hypr-config-service" bluetooth start ;;
+                "Open Bluetooth settings") blueman-manager ;;
+                "") exit 0 ;;
+                *) printf 'waybar-control-menu: unexpected Bluetooth menu item: %s\n' "$choice" >&2; exit 1 ;;
+            esac
+        fi
+        ;;
+    volume)
+        choice=$(menu "Volume: " "Toggle mute" "Volume up 5%" "Volume down 5%") || exit 0
+        case "$choice" in
+            "Toggle mute") run_action "Volume" wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle ;;
+            "Volume up 5%") run_action "Volume" wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+ ;;
+            "Volume down 5%") run_action "Volume" wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- ;;
+            "") exit 0 ;;
+            *) printf 'waybar-control-menu: unexpected volume menu item: %s\n' "$choice" >&2; exit 1 ;;
+        esac
+        ;;
+    brightness)
+        choice=$(menu "Brightness: " "Increase brightness 10%" "Decrease brightness 10%") || exit 0
+        case "$choice" in
+            "Increase brightness 10%") run_action "Brightness" brightnessctl set 10%+ ;;
+            "Decrease brightness 10%") run_action "Brightness" brightnessctl set 10%- ;;
+            "") exit 0 ;;
+            *) printf 'waybar-control-menu: unexpected brightness menu item: %s\n' "$choice" >&2; exit 1 ;;
+        esac
+        ;;
+    power)
+        choice=$(menu "Power: " "Lock" "Logout" "Reboot" "Shutdown") || exit 0
+        case "$choice" in
+            "Lock") hyprlock ;;
+            "Logout") hyprctl dispatch exit ;;
+            "Reboot") power_action reboot ;;
+            "Shutdown") power_action poweroff ;;
+            "") exit 0 ;;
+            *) printf 'waybar-control-menu: unexpected power menu item: %s\n' "$choice" >&2; exit 1 ;;
+        esac
+        ;;
+    *)
+        printf 'Usage: %s {wifi|bluetooth|volume|brightness|power}\n' "$0" >&2
+        exit 2
+        ;;
+esac
