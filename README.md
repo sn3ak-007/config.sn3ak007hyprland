@@ -64,6 +64,11 @@ file if you also have `mpvpaper` and want a video background.
 - The GTK network/Bluetooth popup needs GTK 3, PyGObject, Pycairo, and
   GTK Layer Shell. eduVPN controls are optional and appear only when its CLI
   and GUI are available on `PATH`.
+- For DCTerra eduroam, use the official [geteduroam Linux client](https://github.com/geteduroam/linux-app/releases)
+  and select **DCTerra**. DCTerra's official CAT entry redirects to its
+  geteduroam provisioning profile; do not use a hand-built PEAP profile or
+  disable certificate verification. The Waybar Wi-Fi menu reuses the
+  generated `eduroam (from geteduroam)` profile when it is present.
 - Fedora, Debian/Ubuntu, Arch, openSUSE, and Gentoo package commands are
   provided as a convenience, but this profile has only been exercised on its
   original Gentoo/Hyprland setup. Review the scripts and distribution package

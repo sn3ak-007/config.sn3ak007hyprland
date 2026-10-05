@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+client=$(command -v geteduroam-gui || true)
+if [ -z "$client" ] && [ -x "$HOME/.local/bin/geteduroam-gui" ]; then
+    client="$HOME/.local/bin/geteduroam-gui"
+fi
+
+if [ -z "$client" ]; then
+    printf '%s\n' \
+        "The old manual PEAP profile is not valid for DCTerra's current eduroam setup." \
+        "Install the official geteduroam Linux client and select DCTerra." >&2
+    exit 1
+fi
+
+exec "$client"

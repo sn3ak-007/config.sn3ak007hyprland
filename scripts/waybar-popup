@@ -575,33 +575,51 @@ def show_wifi():
                     ):
                         if target_ssid.casefold() == "eduroam":
                             try:
-                                subprocess.run(
-                                    ["nmcli", "connection", "show", "eduroam"],
-                                    check=True,
-                                    capture_output=True,
-                                    text=True,
-                                    timeout=5,
+                                profiles = run_command(
+                                    "nmcli",
+                                    "-g",
+                                    "NAME",
+                                    "connection",
+                                    "show",
+                                ).splitlines()
+                                profile = next(
+                                    (
+                                        name
+                                        for name in profiles
+                                        if name == "eduroam (from geteduroam)"
+                                    ),
+                                    None,
                                 )
-                                subprocess.Popen(
-                                    [
-                                        "alacritty",
-                                        "-e",
-                                        "nmcli",
-                                        "--ask",
-                                        "connection",
-                                        "up",
-                                        "id",
-                                        "eduroam",
-                                    ]
-                                )
+                                if profile:
+                                    subprocess.Popen(
+                                        [
+                                            "alacritty",
+                                            "-e",
+                                            "nmcli",
+                                            "connection",
+                                            "up",
+                                            "id",
+                                            profile,
+                                        ]
+                                    )
+                                else:
+                                    client = shutil.which("geteduroam-gui")
+                                    if not client:
+                                        candidate = os.path.expanduser(
+                                            "~/.local/bin/geteduroam-gui"
+                                        )
+                                        if os.access(candidate, os.X_OK):
+                                            client = candidate
+                                    if not client:
+                                        raise RuntimeError(
+                                            "The official DCTerra profile is missing. "
+                                            "Install/open geteduroam and select DCTerra; "
+                                            "do not use the old PEAP profile."
+                                        )
+                                    subprocess.Popen([client])
                                 Gtk.main_quit()
-                            except subprocess.CalledProcessError:
-                                notify_error(
-                                    "eduroam",
-                                    "First run ~/.local/bin/setup-eduroam in a terminal to create the WPA2-Enterprise profile.",
-                                )
-                            except (OSError, subprocess.SubprocessError) as error:
-                                notify_error("eduroam connection", error)
+                            except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+                                notify_error("eduroam", error)
                             return
 
                         if secured:
