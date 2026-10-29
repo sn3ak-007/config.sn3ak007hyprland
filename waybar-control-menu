@@ -1,0 +1,224 @@
+#!/bin/sh
+
+set -eu
+
+command -v fuzzel >/dev/null 2>&1 || {
+    printf '%s\n' "waybar-control-menu: fuzzel is not installed" >&2
+    exit 1
+}
+
+notify() {
+    notify-send --app-name=Waybar "$1" "$2"
+}
+
+run_action() {
+    title=$1
+    shift
+
+    if "$@"; then
+        notify "$title" "Done"
+    else
+        notify-send --app-name=Waybar --urgency=critical "$title" "Command failed: $*"
+        exit 1
+    fi
+}
+
+menu() {
+    prompt=$1
+    shift
+
+    printf '%s\n' "$@" | fuzzel \
+        --dmenu \
+        --prompt="$prompt" \
+        --lines="$menu_lines" \
+        --anchor="$menu_anchor" \
+        --x-margin="$menu_x_margin" \
+        --y-margin=42 \
+        --width=34 \
+        --background-color=111111f2 \
+        --text-color=e6e6e6ff \
+        --prompt-color=bdbdbdff \
+        --match-color=ffffffff \
+        --selection-color=e6e6e6ff \
+        --selection-text-color=111111ff \
+        --selection-match-color=111111ff \
+        --border-width=1 \
+        --border-color=666666ff \
+        --border-radius=0
+}
+
+menu_lines=5
+menu_anchor=top-right
+menu_x_margin=12
+mode=${1:-}
+
+case "$mode" in
+    home)
+        exec "$HOME/.local/bin/waybar-popup" quick-settings
+        ;;
+    wifi)
+        wifi_state=$(nmcli -t -f WIFI radio)
+        case "$wifi_state" in
+            enabled) wifi_action="Turn Wi-Fi off" ;;
+            disabled) wifi_action="Turn Wi-Fi on" ;;
+            *)
+                printf 'waybar-control-menu: unexpected Wi-Fi state: %s\n' "$wifi_state" >&2
+                exit 1
+                ;;
+        esac
+
+        choice=$(menu "Wi-Fi: " "Open Wi-Fi settings" "$wifi_action") || exit 0
+        case "$choice" in
+            "Open Wi-Fi settings") alacritty -e nmtui ;;
+            "Turn Wi-Fi off") run_action "Wi-Fi" nmcli radio wifi off ;;
+            "Turn Wi-Fi on") run_action "Wi-Fi" nmcli radio wifi on ;;
+            "") exit 0 ;;
+            *) printf 'waybar-control-menu: unexpected Wi-Fi menu item: %s\n' "$choice" >&2; exit 1 ;;
+        esac
+        ;;
+    bluetooth)
+        if systemctl is-active --quiet bluetooth.service; then
+            powered=$(timeout 3s bluetoothctl show 2>/dev/null |
+                sed -n 's/^[[:space:]]*Powered: //p' | head -n 1 || true)
+
+            case "$powered" in
+                yes) power_action="Turn Bluetooth off" ;;
+                no) power_action="Turn Bluetooth on" ;;
+                *) power_action="Turn Bluetooth on" ;;
+            esac
+
+            choice=$(menu "Bluetooth: " "Open Bluetooth settings" "$power_action") || exit 0
+            case "$choice" in
+                "Open Bluetooth settings") blueman-manager ;;
+                "Turn Bluetooth on") run_action "Bluetooth" timeout 8s bluetoothctl power on ;;
+                "Turn Bluetooth off") run_action "Bluetooth" timeout 8s bluetoothctl power off ;;
+                "") exit 0 ;;
+                *) printf 'waybar-control-menu: unexpected Bluetooth menu item: %s\n' "$choice" >&2; exit 1 ;;
+            esac
+        else
+            choice=$(menu "Bluetooth: " "Start Bluetooth service" "Open Bluetooth settings") || exit 0
+            case "$choice" in
+                "Start Bluetooth service") run_action "Bluetooth" systemctl start bluetooth.service ;;
+                "Open Bluetooth settings") blueman-manager ;;
+                "") exit 0 ;;
+                *) printf 'waybar-control-menu: unexpected Bluetooth menu item: %s\n' "$choice" >&2; exit 1 ;;
+            esac
+        fi
+        ;;
+    volume)
+        choice=$(menu "Volume: " "Toggle mute" "Volume up 5%" "Volume down 5%") || exit 0
+        case "$choice" in
+            "Toggle mute") run_action "Volume" wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle ;;
+            "Volume up 5%") run_action "Volume" wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+ ;;
+            "Volume down 5%") run_action "Volume" wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- ;;
+            "") exit 0 ;;
+            *) printf 'waybar-control-menu: unexpected volume menu item: %s\n' "$choice" >&2; exit 1 ;;
+        esac
+        ;;
+    audio-output)
+        sink_details=$(pactl list sinks) || {
+            notify-send --app-name=Waybar --urgency=critical "Audio output" "Could not list audio output devices."
+            exit 1
+        }
+        sink_data=$(printf '%s\n' "$sink_details" | awk '
+            /^Sink #/ {
+                if (name != "" && description != "") print name "\t" id "\t" description
+                id = $0
+                sub(/^Sink #/, "", id)
+                name = ""
+                description = ""
+            }
+            /^[[:space:]]*Name: / { name = $2 }
+            /^[[:space:]]*Description: / {
+                sub(/^[[:space:]]*Description: /, "")
+                description = $0
+            }
+            END {
+                if (name != "" && description != "") print name "\t" id "\t" description
+            }
+        ')
+        if [ -z "$sink_data" ]; then
+            notify-send --app-name=Waybar --urgency=critical "Audio output" "No audio output devices are available."
+            exit 1
+        fi
+
+        tab=$(printf '\t')
+        set --
+        while IFS="$tab" read -r sink_name sink_id description; do
+            [ -n "$sink_name" ] || continue
+            set -- "$@" "$description ($sink_name)"
+        done <<EOF
+$sink_data
+EOF
+
+        menu_lines=8
+        choice=$(menu "Audio output: " "$@") || exit 0
+        [ -n "$choice" ] || exit 0
+
+        target_sink=
+        target_sink_id=
+        while IFS="$tab" read -r sink_name sink_id description; do
+            [ -n "$sink_name" ] || continue
+            if [ "$choice" = "$description ($sink_name)" ]; then
+                target_sink=$sink_name
+                target_sink_id=$sink_id
+                break
+            fi
+        done <<EOF
+$sink_data
+EOF
+        if [ -z "$target_sink" ]; then
+            printf 'waybar-control-menu: unexpected audio output menu item: %s\n' "$choice" >&2
+            exit 1
+        fi
+
+        if ! pactl set-default-sink "$target_sink"; then
+            notify-send --app-name=Waybar --urgency=critical "Audio output" "Could not set the selected output as default."
+            exit 1
+        fi
+        sink_inputs=$(pactl list short sink-inputs) || {
+            notify-send --app-name=Waybar --urgency=critical "Audio output" "The default changed, but active audio streams could not be listed."
+            exit 1
+        }
+        move_failed=0
+        while IFS="$tab" read -r input_id current_sink_id _; do
+            [ -n "$input_id" ] || continue
+            [ "$current_sink_id" = "$target_sink_id" ] && continue
+            if ! pactl move-sink-input "$input_id" "$target_sink"; then
+                printf 'waybar-control-menu: could not move audio stream %s to %s\n' "$input_id" "$target_sink" >&2
+                move_failed=1
+            fi
+        done <<EOF
+$sink_inputs
+EOF
+        if [ "$move_failed" -ne 0 ]; then
+            notify-send --app-name=Waybar --urgency=critical "Audio output" "The default output changed, but one or more active streams could not be moved."
+            exit 1
+        fi
+        notify "Audio output" "$choice"
+        ;;
+    brightness)
+        choice=$(menu "Brightness: " "Increase brightness 10%" "Decrease brightness 10%") || exit 0
+        case "$choice" in
+            "Increase brightness 10%") run_action "Brightness" brightnessctl set 10%+ ;;
+            "Decrease brightness 10%") run_action "Brightness" brightnessctl set 10%- ;;
+            "") exit 0 ;;
+            *) printf 'waybar-control-menu: unexpected brightness menu item: %s\n' "$choice" >&2; exit 1 ;;
+        esac
+        ;;
+    power)
+        choice=$(menu "Power: " "Lock" "Logout" "Reboot" "Shutdown") || exit 0
+        case "$choice" in
+            "Lock") hyprlock ;;
+            "Logout") hyprctl dispatch exit ;;
+            "Reboot") systemctl reboot ;;
+            "Shutdown") systemctl poweroff ;;
+            "") exit 0 ;;
+            *) printf 'waybar-control-menu: unexpected power menu item: %s\n' "$choice" >&2; exit 1 ;;
+        esac
+        ;;
+    *)
+        printf 'Usage: %s {home|wifi|bluetooth|volume|brightness|power}\n' "$0" >&2
+        exit 2
+        ;;
+esac
