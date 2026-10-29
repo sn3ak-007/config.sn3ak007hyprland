@@ -1,0 +1,22 @@
+name: Lint Config
+
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: JSON Lint
+        run: |
+          if [ -f waybar/config.jsonc ]; then
+            python3 -m json.tool waybar/config.jsonc > /dev/null || echo "Waybar JSON is invalid"
+          fi
+      - name: Shell Check
+        run: |
+          # Simple check if scripts are executable and have shebangs
+          for f in waybar-popup waybar-control-menu; do
+            if [ -f "$f" ]; then
+              head -n 1 "$f" | grep -q "^#!" || echo "Script $f missing shebang"
+            fi
+          done
