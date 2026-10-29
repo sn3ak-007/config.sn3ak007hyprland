@@ -1,22 +1,41 @@
-# Hyprland Config by sn3ak-007
+# 🚀 Polished Hyprland Config by sn3ak-007
 
-A polished Hyprland and Waybar configuration.
+A modern, dark-themed, and highly functional Hyprland setup designed for productivity and aesthetics.
 
-## Installation
+## ✨ Features
+- **Waybar Customization**: A clean bar with integrated system monitors.
+- **Advanced Control Menu**: Right-click the audio icon to switch outputs or use the popup for quick settings.
+- **Smart Audio Handling**: Automatic stream migration when changing output devices.
+- **Fedora & Gentoo Ready**: Optimized for stability across different distributions.
 
-1. Copy the `hypr` and `waybar` directories to your `~/.config/` folder.
-2. Place the scripts from the root into `~/.local/bin/` and make them executable:
-   `chmod +x ~/.local/bin/waybar-popup ~/.local/bin/waybar-control-menu`
+## 🛠️ Installation
 
-## Fedora Compatibility
-This configuration uses common tools:
-- Hyprland
-- Waybar
-- Fuzzel
-- WirePlumber / PipeWire
-- Brightnessctl
-- NetworkManager (nmcli)
-- Bluez (bluetoothctl)
+### 1. Copy Configuration
+Clone this repository or copy the files to your config folder:
+```bash
+mkdir -p ~/.config/hypr ~/.config/waybar ~/.local/bin
+cp -r hypr/* ~/.config/hypr/
+cp -r waybar/* ~/.config/waybar/
+cp waybar-popup waybar-control-menu ~/.local/bin/
+chmod +x ~/.local/bin/waybar-popup ~/.local/bin/waybar-control-menu
+```
 
-On Fedora, ensure these are installed:
-`sudo dnf install hyprland waybar fuzzel brightnessctl bluez bluez-utils network-manager`
+### 2. Install Dependencies
+Ensure you have the following tools installed:
+
+**For Fedora:**
+```bash
+sudo dnf install hyprland waybar fuzzel brightnessctl bluez bluez-utils network-manager notify-send
+```
+
+**For Gentoo:**
+Ensure you have `waybar`, `fuzzel`, `brightnessctl`, `bluez`, and `networkmanager` in your world file.
+
+## ⌨️ Usage
+- **Waybar Audio**: 
+  - Left-click $\rightarrow$ Volume slider popup.
+  - Right-click $\rightarrow$ Choose audio output device.
+- **Quick Settings**: Accessible via the clock/home menu in Waybar.
+
+## 📄 License
+MIT
