@@ -1,41 +1,66 @@
-# 🚀 Polished Hyprland Config by sn3ak-007
+# 🌌 sn3ak-007 Hyprland Ecosystem
 
-A modern, dark-themed, and highly functional Hyprland setup designed for productivity and aesthetics.
+![Hyprland](https://img.shields.io/badge/Window_Manager-Hyprland-blue)
+![Status](https://img.shields.io/badge/Status-Polished-green)
+![Distro](https://img.shields.io/badge/Distro-Fedora%20%7C%20Gentoo-orange)
 
-## ✨ Features
-- **Waybar Customization**: A clean bar with integrated system monitors.
-- **Advanced Control Menu**: Right-click the audio icon to switch outputs or use the popup for quick settings.
-- **Smart Audio Handling**: Automatic stream migration when changing output devices.
-- **Fedora & Gentoo Ready**: Optimized for stability across different distributions.
+A curated, high-performance Hyprland configuration focusing on a seamless user experience, a deep-black aesthetic, and intelligent system automation.
 
-## 🛠️ Installation
+## 🌟 Key Highlights
 
-### 1. Copy Configuration
-Clone this repository or copy the files to your config folder:
+### 🎧 Intelligent Audio Management
+- **Dynamic Output Switching**: Change audio devices on the fly via Waybar.
+- **Auto-Migration**: Active streams (like Firefox or Spotify) automatically follow your selected output device.
+- **Quick Control**: integrated volume sliders and mute toggles in a custom popup.
+
+### 🛠️ Integrated Tooling
+- **Custom Control Center**: A centralized popup for Wi-Fi, Bluetooth, Brightness, and Power management.
+- **Performance Boost**: One-click CPU performance switching integrated directly into the bar.
+- **Hybrid GPU Offloading**: Optimized for laptops with dual GPUs (Intel/NVIDIA).
+
+### 🎨 Aesthetics & UX
+- **Deep Dark Theme**: A consistent, eye-friendly dark palette across all components.
+- **Noto Typography**: Full multi-language support (CJK/Emoji) for a global experience.
+- **Minimalist Waybar**: Information-dense but clutter-free system monitoring.
+
+## 🚀 Quick Start
+
+### 📦 Prerequisites
+Ensure you have the following installed:
+- **Core**: `hyprland`, `waybar`, `fuzzel`
+- **Utilities**: `brightnessctl`, `bluez`, `bluez-utils`, `network-manager`, `libnotify`
+- **Audio**: `pipewire`, `wireplumber`
+
+**Fedora installation:**
 ```bash
+sudo dnf install hyprland waybar fuzzel brightnessctl bluez bluez-utils network-manager libnotify pipewire wireplumber
+```
+
+### 📂 Installation
+```bash
+# 1. Create necessary directories
 mkdir -p ~/.config/hypr ~/.config/waybar ~/.local/bin
+
+# 2. Deploy configuration
 cp -r hypr/* ~/.config/hypr/
 cp -r waybar/* ~/.config/waybar/
 cp waybar-popup waybar-control-menu ~/.local/bin/
+
+# 3. Set permissions
 chmod +x ~/.local/bin/waybar-popup ~/.local/bin/waybar-control-menu
 ```
 
-### 2. Install Dependencies
-Ensure you have the following tools installed:
+## ⌨️ Interaction Map
 
-**For Fedora:**
-```bash
-sudo dnf install hyprland waybar fuzzel brightnessctl bluez bluez-utils network-manager notify-send
-```
+| Action | Component | Result |
+| :--- | :--- | :--- |
+| **Left Click** | Audio Icon | Opens Volume Slider Popup |
+| **Right Click** | Audio Icon | Switches Audio Output Device |
+| **Left Click** | Clock | Opens System Control Center |
+| **Click** | CPU Icon | Toggles CPU Performance Mode |
 
-**For Gentoo:**
-Ensure you have `waybar`, `fuzzel`, `brightnessctl`, `bluez`, and `networkmanager` in your world file.
+## 🛡️ Maintenance
+This repository includes **GitHub Actions** that automatically lint the configuration and scripts on every push to ensure stability.
 
-## ⌨️ Usage
-- **Waybar Audio**: 
-  - Left-click $\rightarrow$ Volume slider popup.
-  - Right-click $\rightarrow$ Choose audio output device.
-- **Quick Settings**: Accessible via the clock/home menu in Waybar.
-
-## 📄 License
-MIT
+---
+*Maintained by [sn3ak-007](https://github.com/sn3ak-007)*
